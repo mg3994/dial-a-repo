@@ -85,58 +85,59 @@ When a verified `realtime.call.incoming` event is received:
 
 ---
 
-## 4. Real-time Conversation Lifecycle (`src/callSession.ts`)
+## 4. Real-time Conversation Lifecycle & Latency Performance (`src/callSession.ts`)
 
-A standard Cloudflare Worker request has execution limits that cannot sustain a multi-minute phone call. **Cloudflare Durable Objects** provide persistent compute instances that remain active for as long as a WebSocket connection remains connected.
+### 4.1 Is it Full-Duplex or do callers have to wait?
+**Yes, it is true full-duplex.**
 
-### 4.1 WebSocket Connection Setup
-The `CallSession` Durable Object connects outbound to xAI's Realtime WebSocket API:
-```ts
-const wsUrl = `https://api.x.ai/v1/realtime?call_id=${encodeURIComponent(callId)}`;
-const resp = await fetch(wsUrl, {
-  headers: {
-    Upgrade: "websocket",
-    Authorization: `Bearer ${this.env.XAI_API_KEY}`,
-  },
-});
-```
-*Note: In Cloudflare Workers, outbound WebSocket handshakes use `https://` with an `Upgrade: websocket` header (using `wss://` directly in `fetch()` throws an error).*
-
-### 4.2 Session Configuration (`session.update`)
-Once `ws.accept()` accepts the WebSocket connection, `CallSession` sends a `session.update` frame to configure xAI's real-time engine:
-* **Voice:** `"celeste"`
-* **Instructions:** `BASE_INSTRUCTIONS` (persona definition, rules for handling repo queries, tool call guidelines).
-* **Turn Detection:** `{ type: "server_vad" }` (Server-side Voice Activity Detection handles interruptions and natural turn-taking).
-* **Tools:** Array defining four function call schemas (`load_repo`, `repo_recent_commits`, `repo_file`, `repo_diff`).
-* **Transcription:** `{ audio: { input: { transcription: { model: "grok-transcribe" } } } }` (enables real-time STT transcripts of caller speech for logging and observability).
-
-### 4.3 Scripted Greeting (`force_message`)
-To guarantee that the assistant always greets callers verbatim without adding model filler:
-```ts
-ws.send(JSON.stringify({
-  type: "conversation.item.create",
-  item: {
-    type: "force_message",
-    role: "assistant",
-    content: [{ type: "output_text", text: "Hi. Tell me the name of any public GitHub repo." }],
-  },
-}));
-```
-`force_message` is an xAI-specific extension that plays TTS-synthesized text verbatim. It counts as the conversation turn itself, so no additional `response.create` message is sent for the greeting.
-
-### 4.4 Event Loop & Tool Dispatch
-The Durable Object listens for WebSocket messages:
-* `response.function_call_arguments.done`: Triggered when the model decides to invoke a tool.
-* The arguments are parsed, dispatched to the corresponding method (`runLoadRepo`, `runRecentCommits`, `runRepoFile`, or `runRepoDiff`), and the JSON output is returned via a `function_call_output` item followed by `response.create` so the model speaks the result back to the caller.
-* `close` / `error`: Cleans up the session when the caller hangs up or the connection closes.
+* **Direct Audio Stream:** Audio flows over full-duplex SIP (RTP/TLS) directly between the telephony network and xAI's server-side audio pipeline.
+* **Server-side Voice Activity Detection (Server VAD):** Configured via `{ turn_detection: { type: "server_vad" } }`. The model listens continuously even while speaking. If the caller starts talking or interrupts mid-sentence, xAI immediately truncates its own audio playback and shifts turn control back to the caller.
+* **Latency Profile:**
+  * **Normal conversational turns (no tool call):** Very low latency (~300-800ms) because xAI streams output audio deltas as soon as token generation begins.
+  * **Turns requiring tool calls (`load_repo` or `repo_file`):** Latency includes the time taken to execute the tool RPC (GitHub API / gitingest / git clone) over the network. To minimize perceived latency, `BASE_INSTRUCTIONS` tells the assistant to speak a brief filler like *"Let me pull that up..."* before invoking tool RPCs.
 
 ---
 
-## 5. Tool Integration & Repository Inspection
+## 5. Keypad Inputs (DTMF) & Language Selection (e.g. Press 1 for Hindi, Press 2 for English)
+
+### 5.1 Spoken Multilingual Support
+xAI's underlying voice model automatically recognizes and responds in whichever language the caller speaks (e.g., Hindi, English, Spanish, French). No code changes are strictly needed for natural spoken language switching.
+
+### 5.2 Keypad (DTMF) Input Integration
+If you want explicit keypad menu navigation (e.g., "Press 1 for Hindi, Press 2 for English"):
+
+1. **Option A: Spoken Speech Recognition (Recommended & Native to xAI Realtime)**
+   Update `GREETING` and `BASE_INSTRUCTIONS` in `src/callSession.ts`:
+   ```ts
+   const GREETING = "Welcome to Dial-a-Repo. Say 1 or Hindi for Hindi, or say 2 or English for English.";
+   ```
+   When the caller says "1" or "Hindi", xAI's Grok transcription captures the word or digit, and the system prompt instructs the assistant to switch its response language and voice tone accordingly via `session.update`.
+
+2. **Option B: SIP In-band DTMF Telephony Signals**
+   SignalWire forwards SIP INFO or RFC 2833 DTMF digit events over SIP to xAI.
+   When xAI surface DTMF events on the WebSocket:
+   ```ts
+   ws.addEventListener("message", (msg) => {
+     const evt = JSON.parse(msg.data);
+     if (evt.type === "conversation.item.input_dtmf") {
+       const digit = evt.digit; // '1' or '2'
+       if (digit === "1") {
+         ws.send(JSON.stringify({
+           type: "session.update",
+           session: { instructions: BASE_INSTRUCTIONS + "\nAlways speak and respond in Hindi." }
+         }));
+       }
+     }
+   });
+   ```
+
+---
+
+## 6. Tool Integration & Repository Inspection
 
 The system provides two levels of repository inspection:
 
-### 5.1 Fast Digest (`src/repoTool.ts`)
+### 6.1 Fast Digest (`src/repoTool.ts`)
 When `load_repo` is called:
 1. **Name Resolution:**
    * If input is an exact `owner/repo` or GitHub URL (parsed by `parseRepoSpec`), it fetches metadata directly.
@@ -151,7 +152,7 @@ When `load_repo` is called:
 
 ---
 
-### 5.2 Deep Git Tooling (`src/repoWorkspace.ts` & `@cloudflare/computer`)
+### 6.2 Deep Git Tooling (`src/repoWorkspace.ts` & `@cloudflare/computer`)
 
 For deep analysis (`repo_recent_commits`, `repo_file`, `repo_diff`), a flat digest is insufficient. Dial-a-Repo uses a second Durable Object class: **`RepoWorkspace`**.
 
@@ -172,7 +173,7 @@ For deep analysis (`repo_recent_commits`, `repo_file`, `repo_diff`), a flat dige
 
 ---
 
-## 6. Summary of Protocols, APIs, & Dependencies
+## 7. Summary of Protocols, APIs, & Dependencies
 
 | Layer / Mechanism | Tech / Protocol | Endpoint / Library | Purpose |
 | :--- | :--- | :--- | :--- |
