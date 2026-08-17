@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "support-on-call",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SUPPORT_CALL_SESSION",
+        "class_name": "SupportCallSession"
+      },
+      {
+        "name": "USER_MEMORY",
+        "class_name": "UserMemory"
+      },
+      {
+        "name": "SUPPORT_CONFERENCE",
+        "class_name": "SupportConference"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["SupportCallSession", "UserMemory", "SupportConference"]
+    }
+  ]
+}
