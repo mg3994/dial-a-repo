@@ -2,6 +2,9 @@
  * Model Context Protocol (MCP) tool schemas and handlers for Ecommerce Support.
  */
 
+import { BloggerDataService } from "../schema/blogger";
+import { SchemaValidator } from "../schema/validator";
+
 export interface McpToolRequest {
   name: string;
   arguments: Record<string, any>;
@@ -140,6 +143,32 @@ export async function executeMcpTool(req: McpToolRequest): Promise<McpToolResult
             sent: true,
             phone: args.phone,
             channel: "SMS",
+          },
+        };
+      }
+
+      case "mcp_lookup_product_schema": {
+        const { blogId, postId } = args;
+        const bloggerService = new BloggerDataService();
+        const rawSchema = await bloggerService.fetchPostSchema({ blogId, postId });
+
+        if (!rawSchema) {
+          return { tool: name, status: "error", error: `Could not fetch schema from blog ${blogId} post ${postId}` };
+        }
+
+        const resolved = await bloggerService.resolveAndLoadSchema(rawSchema, { base: `${blogId}/${postId}` });
+        const graphDoc = bloggerService.toGraphDocument(resolved);
+
+        const isProduct = SchemaValidator.isProduct(rawSchema);
+        const offerInfo = SchemaValidator.extractOfferDetails(rawSchema);
+
+        return {
+          tool: name,
+          status: "success",
+          data: {
+            isProduct,
+            offerInfo,
+            graphDocument: graphDoc,
           },
         };
       }
