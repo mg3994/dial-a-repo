@@ -1,0 +1,20 @@
+[package]
+name = "dial-a-repo-rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+axum = "0.7"
+tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+reqwest = { version = "0.12", features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+urlencoding = "2.1"
+http = "1.1"
