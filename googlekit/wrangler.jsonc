@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "googlekit",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GOOGLEKIT_CALL_SESSION",
+        "class_name": "GoogleKitCallSession"
+      },
+      {
+        "name": "USER_MEMORY",
+        "class_name": "UserMemory"
+      },
+      {
+        "name": "SUPPORT_CONFERENCE",
+        "class_name": "SupportConference"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["GoogleKitCallSession", "UserMemory", "SupportConference"]
+    }
+  ]
+}
